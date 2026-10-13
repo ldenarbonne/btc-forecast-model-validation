@@ -1,0 +1,10 @@
+streamlit>=1.50
+plotly>=5.20
+pandas>=2.1
+numpy>=1.26
+requests>=2.31
+joblib>=1.3
+vmdpy==0.2
+# Same version as the one used to save the scalers in models/*.pkl
+scikit-learn==1.9.1
+# torch is installed separately in the Dockerfile (CPU-only build, much smaller image)
