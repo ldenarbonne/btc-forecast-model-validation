@@ -14,8 +14,6 @@ RUN pip install -r requirements.txt
 
 COPY app.py .
 COPY models/ models/
-# Optional fallback data (only used if Binance cannot be reached)
-COPY data/ data/
 
 # Cloud Run sends traffic to the port in $PORT (8080 by default)
 EXPOSE 8080
