@@ -1,0 +1,67 @@
+{
+  "train_period": "2018-01-11 -> 2024-06-29",
+  "valid_period": "2024-07-01 -> 2025-06-29",
+  "test_period": "2025-07-01 -> 2026-10-12",
+  "n_train": 56672,
+  "n_valid": 8736,
+  "n_test": 11240,
+  "vmd_window_hours": 256,
+  "horizons": {
+    "1h": {
+      "rmse_model_pct": 0.4414348900318146,
+      "rmse_random_walk_pct": 0.44131582975387573,
+      "r2_oos_vs_random_walk": -0.0005396604537963867,
+      "directional_accuracy": 0.5028469750889679,
+      "share_of_up_moves": 0.501423487544484,
+      "p_value_vs_coin_flip": 0.2761788079026297
+    },
+    "2h": {
+      "rmse_model_pct": 0.6240692734718323,
+      "rmse_random_walk_pct": 0.6234106421470642,
+      "r2_oos_vs_random_walk": -0.0021140575408935547,
+      "directional_accuracy": 0.5062277580071174,
+      "share_of_up_moves": 0.504626334519573,
+      "p_value_vs_coin_flip": 0.09491293782395027
+    },
+    "4h": {
+      "rmse_model_pct": 0.878771185874939,
+      "rmse_random_walk_pct": 0.877835214138031,
+      "r2_oos_vs_random_walk": -0.002133607864379883,
+      "directional_accuracy": 0.499288256227758,
+      "share_of_up_moves": 0.5029359430604983,
+      "p_value_vs_coin_flip": 0.5636963916086579
+    },
+    "6h": {
+      "rmse_model_pct": 1.0790737867355347,
+      "rmse_random_walk_pct": 1.0778342485427856,
+      "r2_oos_vs_random_walk": -0.002301454544067383,
+      "directional_accuracy": 0.4927935943060498,
+      "share_of_up_moves": 0.5070284697508897,
+      "p_value_vs_coin_flip": 0.9379118204147325
+    },
+    "8h": {
+      "rmse_model_pct": 1.2426280975341797,
+      "rmse_random_walk_pct": 1.2413862943649292,
+      "r2_oos_vs_random_walk": -0.0020017623901367188,
+      "directional_accuracy": 0.5056049822064057,
+      "share_of_up_moves": 0.5095195729537366,
+      "p_value_vs_coin_flip": 0.11919135441291157
+    },
+    "12h": {
+      "rmse_model_pct": 1.514258623123169,
+      "rmse_random_walk_pct": 1.5137547254562378,
+      "r2_oos_vs_random_walk": -0.0006659030914306641,
+      "directional_accuracy": 0.5114768683274021,
+      "share_of_up_moves": 0.5140569395017793,
+      "p_value_vs_coin_flip": 0.007671404104761957
+    },
+    "24h": {
+      "rmse_model_pct": 2.1582274436950684,
+      "rmse_random_walk_pct": 2.1575303077697754,
+      "r2_oos_vs_random_walk": -0.0006461143493652344,
+      "directional_accuracy": 0.5150355871886121,
+      "share_of_up_moves": 0.5105871886120996,
+      "p_value_vs_coin_flip": 0.0007391903360427899
+    }
+  }
+}
