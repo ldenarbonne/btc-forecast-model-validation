@@ -232,7 +232,7 @@ start_dt, end_dt = st.sidebar.slider(
     "Observation window",
     min_value=df_h.index[VMD_WINDOW].to_pydatetime(),
     max_value=df_h.index[-1].to_pydatetime(),
-    value=(df_h.index[max(VMD_WINDOW, len(df_h) - 200)].to_pydatetime(),
+    value=(df_h.index[max(VMD_WINDOW, len(df_h) - 72)].to_pydatetime(),
            df_h.index[-1].to_pydatetime()),
     step=pd.Timedelta(hours=1),
     format="YYYY-MM-DD HH:mm"
@@ -318,6 +318,13 @@ fig.add_trace(go.Scatter(
 ))
 
 period = f"{df_h.index[0]:%B %Y} → {df_h.index[-1]:%d %B %Y}"
+
+# Initial view: zoom on the observation window and the forecast (zoom out to see the full history)
+x_start = df_window.index[0]
+x_end = dates[-1] + pd.Timedelta(hours=max(2, horizon_sel // 4))
+visible = np.concatenate([df_window["close"].values, np.array(prices)])
+pad = (visible.max() - visible.min()) * 0.08 or visible.max() * 0.01
+y_low, y_high = visible.min() - pad, visible.max() + pad
 fig.update_layout(
     title=dict(
         text=(
@@ -336,12 +343,12 @@ fig.update_layout(
     plot_bgcolor="#0e1117",
     paper_bgcolor="#0e1117",
     font=dict(color="white"),
-    xaxis=dict(showgrid=True, gridcolor="#333"),
-    yaxis=dict(showgrid=True, gridcolor="#333"),
+    xaxis=dict(showgrid=True, gridcolor="#333", range=[x_start, x_end]),
+    yaxis=dict(showgrid=True, gridcolor="#333", range=[y_low, y_high]),
     height=850
 )
 
-st.plotly_chart(fig, width="stretch", config={"scrollZoom": True})
+st.plotly_chart(fig, width="stretch", theme=None, config={"scrollZoom": True})
 
 # ============================================================
 # OUT-OF-SAMPLE PERFORMANCE (from train.py)
