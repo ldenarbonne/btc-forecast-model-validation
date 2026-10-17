@@ -15,19 +15,23 @@ app.py               Streamlit application
 models/              Trained model (.pth), scalers (.pkl) and out-of-sample evaluation (evaluation.json)
 training/            Scripts to download the data and retrain the model
 data/                Optional fallback CSV (1-minute candles), used only if Binance is unreachable
-requirements.txt     Python dependencies (PyTorch CPU is installed in the Dockerfile)
+requirements.txt     Python dependencies (CPU-only PyTorch on Linux)
 Dockerfile           Container image for Cloud Run
 ```
 
 ## Run locally
 
 ```bash
-pip install torch --index-url https://download.pytorch.org/whl/cpu
 pip install -r requirements.txt
 streamlit run app.py
 ```
 
-## Deploy to Google Cloud Run
+## Deploy for free on Streamlit Community Cloud
+
+On https://share.streamlit.io: Create app → repository `ldenarbonne/btc-forecast-model-validation`,
+branch `main`, main file `app.py`, Advanced settings → Python **3.12**.
+
+## Deploy to Google Cloud Run (alternative)
 
 ```bash
 gcloud run deploy btc-dashboard --source . --region europe-west1 --memory 2Gi --allow-unauthenticated --project YOUR_PROJECT_ID

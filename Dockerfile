@@ -6,9 +6,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# CPU-only PyTorch: Cloud Run has no GPU, and this keeps the image small
-RUN pip install torch --index-url https://download.pytorch.org/whl/cpu
-
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 
