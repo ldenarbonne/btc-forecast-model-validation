@@ -31,6 +31,8 @@ SCALER_PATH = MODEL_DIR / os.getenv("SCALER_FILE", "1h_2h_4h_6h_8h_12h_24h.pkl")
 FALLBACK_CSV = Path(os.getenv("FALLBACK_CSV", BASE_DIR / "data" / "Val_data.csv"))
 
 EVAL_PATH = MODEL_DIR / "evaluation.json"
+COMPARISON_PATH = MODEL_DIR / "comparison_tft_vs_cnn.json"
+RISK_CONE_PATH = MODEL_DIR / "risk_cone.json"
 
 # Start of the price history downloaded and shown on the chart
 HISTORY_START = os.getenv("HISTORY_START", "2025-11-11")
@@ -177,13 +179,27 @@ def causal_vmd_features(log_returns: np.ndarray) -> np.ndarray:
     return u.T[-SEQ_LEN:].astype(np.float32)
 
 
-@st.cache_data
-def load_evaluation():
+def _read_json(path):
     try:
         import json
-        return json.loads(EVAL_PATH.read_text())
+        return json.loads(Path(path).read_text())
     except (OSError, ValueError):
         return None
+
+
+@st.cache_data
+def load_evaluation():
+    return _read_json(EVAL_PATH)
+
+
+@st.cache_data
+def load_comparison():
+    return _read_json(COMPARISON_PATH)
+
+
+@st.cache_data
+def load_risk_cone():
+    return _read_json(RISK_CONE_PATH)
 
 # ============================================================
 # SIDEBAR — DATA SOURCE
@@ -241,8 +257,13 @@ start_dt, end_dt = st.sidebar.slider(
 horizon_sel = st.sidebar.selectbox(
     "Maximum forecast horizon (h)",
     HORIZONS,
-    index=HORIZONS.index(4)
+    index=HORIZONS.index(24)
 )
+
+risk_cone = load_risk_cone()
+show_cone = st.sidebar.checkbox("Show risk cone (68% / 95% / 99%)", value=risk_cone is not None,
+                                disabled=risk_cone is None)
+n_scenarios = st.sidebar.slider("Simulated scenarios", 0, 20, 5, disabled=risk_cone is None)
 
 st.sidebar.caption(
     f"Source: {data_source}  \n"
@@ -284,10 +305,53 @@ for h in HORIZONS:
     labels.append(f"H+{h}h")
 
 # ============================================================
+# RISK CONE, SCENARIOS AND REALISED PATH
+# ============================================================
+# EWMA volatility (RiskMetrics, lambda = 0.94) known at the end of the window
+EWMA_LAMBDA = risk_cone["lambda"] if risk_cone else 0.94
+past_r = df_h.loc[:end_dt, "log_return"]
+sigma_now = float(np.sqrt(past_r.pow(2).ewm(alpha=1 - EWMA_LAMBDA, adjust=False).mean().iloc[-1]))
+t0 = df_window.index[-1]
+cone_hours = np.arange(0, horizon_sel + 1)
+cone_times = [t0 + pd.Timedelta(hours=int(h)) for h in cone_hours]
+cone = {}
+if risk_cone and show_cone:
+    for q in ("0.99", "0.95", "0.68"):
+        c = np.array([0.0] + [risk_cone["multipliers"][str(h)][q] for h in cone_hours[1:]])
+        width = c * sigma_now * np.sqrt(cone_hours)
+        cone[q] = (last_price * np.exp(-width), last_price * np.exp(width))
+
+scenarios = []
+if risk_cone and n_scenarios > 0:
+    rng = np.random.default_rng(int(pd.Timestamp(t0).timestamp()) // 3600)
+    z = np.array(risk_cone["standardised_hourly_returns"])
+    draws = rng.choice(z, size=(n_scenarios, horizon_sel)) * sigma_now
+    scenarios = last_price * np.exp(np.concatenate([np.zeros((n_scenarios, 1)), np.cumsum(draws, axis=1)], axis=1))
+
+realised = df_h.loc[t0:t0 + pd.Timedelta(hours=horizon_sel), "close"]
+realised = realised if len(realised) > 1 else None
+
+# ============================================================
 # PLOT
 # ============================================================
 
 fig = go.Figure()
+
+cone_style = {"0.99": ("rgba(255,165,0,0.10)", "99% risk cone"),
+              "0.95": ("rgba(255,165,0,0.18)", "95% risk cone"),
+              "0.68": ("rgba(255,165,0,0.30)", "68% risk cone")}
+for q, (low, high) in cone.items():
+    colour, name = cone_style[q]
+    fig.add_trace(go.Scatter(x=cone_times, y=high, mode="lines", line=dict(width=0),
+                             hoverinfo="skip", showlegend=False))
+    fig.add_trace(go.Scatter(x=cone_times, y=low, mode="lines", line=dict(width=0), fill="tonexty",
+                             fillcolor=colour, name=name, hoverinfo="skip"))
+
+for i, path in enumerate(scenarios):
+    fig.add_trace(go.Scatter(x=cone_times, y=path, mode="lines",
+                             line=dict(color="rgba(200,200,200,0.55)", width=1),
+                             name="Simulated scenarios", legendgroup="scen", showlegend=(i == 0),
+                             hoverinfo="skip"))
 
 fig.add_trace(go.Scatter(
     x=df_h.index,
@@ -306,14 +370,20 @@ fig.add_trace(go.Scatter(
     name="Observed (window)"
 ))
 
+if realised is not None:
+    fig.add_trace(go.Scatter(x=realised.index, y=realised.values, mode="lines",
+                             line=dict(color="white", width=2, dash="dash"),
+                             name="Realised (after the window)"))
+
 fig.add_trace(go.Scatter(
     x=dates,
     y=prices,
     mode="lines+markers+text",
     line=dict(color="orange", width=3),
     marker=dict(size=9),
-    text=labels,
-    textposition="top center",
+    text=["" if i < len(labels) - 1 else lab for i, lab in enumerate(labels)],
+    hovertext=labels,
+    textposition="top right",
     name="Forecast (CNN-BiLSTM)"
 ))
 
@@ -322,21 +392,28 @@ period = f"{df_h.index[0]:%B %Y} → {df_h.index[-1]:%d %B %Y}"
 # Initial view: zoom on the observation window and the forecast (zoom out to see the full history)
 x_start = df_window.index[0]
 x_end = dates[-1] + pd.Timedelta(hours=max(2, horizon_sel // 4))
-visible = np.concatenate([df_window["close"].values, np.array(prices)])
+visible = [df_window["close"].values, np.array(prices)]
+if cone:
+    visible += list(cone["0.99"])
+if len(scenarios):
+    visible.append(np.ravel(scenarios))
+if realised is not None:
+    visible.append(realised.values)
+visible = np.concatenate(visible)
 pad = (visible.max() - visible.min()) * 0.08 or visible.max() * 0.01
 y_low, y_high = visible.min() - pad, visible.max() + pad
 fig.update_layout(
     title=dict(
         text=(
-            "<b>CNN-BiLSTM WITH CAUSAL VMD — MULTI-HORIZON BTC FORECAST<br>"
-            f"BTC/USDT HOURLY CLOSES ({period})</b>"
+            "<b>CNN-BiLSTM FORECAST AND RISK CONE — BTC/USDT<br>"
+            f"HOURLY CLOSES ({period})</b>"
         ),
         x=0.5,
         xanchor="center",
         font=dict(size=26)
     ),
     legend=dict(
-        font=dict(size=24)
+        font=dict(size=16)
     ),
     hovermode="x unified",
     dragmode="zoom",
@@ -349,6 +426,15 @@ fig.update_layout(
 )
 
 st.plotly_chart(fig, width="stretch", theme=None, config={"scrollZoom": True})
+
+if risk_cone:
+    st.caption(
+        f"Current hourly volatility (EWMA, λ = {EWMA_LAMBDA}): {sigma_now * 100:.2f}% · "
+        "The orange line is the model's expected path: it is almost flat because the best forecast of a "
+        "random-walk-like price is close to today's price. The cone shows how far the price can move; "
+        "grey lines are simulated scenarios (not forecasts). Move the observation window into the past "
+        "to compare the cone with what actually happened (white dashed line)."
+    )
 
 # ============================================================
 # OUT-OF-SAMPLE PERFORMANCE (from train.py)
@@ -376,3 +462,59 @@ if evaluation:
             "returns are close to unpredictable; this dashboard is a research demonstration, "
             "not investment advice."
         )
+
+comparison = load_comparison()
+if comparison:
+    with st.expander("Comparison with a Temporal Fusion Transformer (TFT)", expanded=False):
+        st.markdown(
+            "A TFT (pytorch-forecasting) was trained on the same data, split and test period, "
+            "with causal inputs (72 hours of returns, absolute returns, 24h volatility, hour and "
+            f"weekday). Same {comparison['n_origins']:,} forecast origins ({comparison['period']})."
+        )
+        rows = []
+        for h in comparison["cnn_bilstm"]:
+            c, t = comparison["cnn_bilstm"][h], comparison["tft"][h]
+            rows.append({
+                "Horizon": h,
+                "R² CNN-BiLSTM": round(c["r2_oos"], 4), "R² TFT": round(t["r2_oos"], 4),
+                "Direction CNN-BiLSTM": f"{c['hit']:.1%}", "Direction TFT": f"{t['hit']:.1%}",
+                "Diebold-Mariano p (CNN)": round(c["dm_p_model_better"], 2),
+                "Diebold-Mariano p (TFT)": round(t["dm_p_model_better"], 2),
+                "Sharpe net CNN": round(c["sharpe_net"], 1), "Sharpe net TFT": round(t["sharpe_net"], 1),
+                "Sharpe buy & hold": round(comparison["buy_and_hold_sharpe"][h], 1),
+            })
+        st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+        st.caption(
+            "Neither model beats the random walk (negative R², no significant Diebold-Mariano test). "
+            "The TFT learned the 2018-2024 upward drift and forecasts a rise most of the time, which "
+            "hurts it over the test period. Strategy: long/short on non-overlapping periods, net of 0.1% per trade."
+        )
+
+if risk_cone:
+    with st.expander("Backtesting of the risk cone (Kupiec test)", expanded=False):
+        st.markdown(
+            f"Multipliers calibrated on {risk_cone['calibration_period']}, tested on "
+            f"{risk_cone['test_period']}. A well-calibrated 95% cone should contain the realised price "
+            "about 95% of the time. Kupiec p-values are computed on non-overlapping observations; "
+            "p < 0.05 means the coverage is significantly wrong."
+        )
+        rows = []
+        for h, row in risk_cone["backtest"].items():
+            rows.append({
+                "Horizon": h,
+                "95% empirical: coverage": f"{row['empirical_95']['coverage']:.1%}",
+                "95% empirical: Kupiec p": round(row["empirical_95"]["kupiec_p"], 2),
+                "95% Gaussian: coverage": f"{row['gaussian_95']['coverage']:.1%}",
+                "95% Gaussian: Kupiec p": round(row["gaussian_95"]["kupiec_p"], 2),
+                "99% empirical: coverage": f"{row['empirical_99']['coverage']:.1%}",
+                "99% empirical: Kupiec p": round(row["empirical_99"]["kupiec_p"], 2),
+                "99% Gaussian: coverage": f"{row['gaussian_99']['coverage']:.1%}",
+                "99% Gaussian: Kupiec p": round(row["gaussian_99"]["kupiec_p"], 2),
+            })
+        st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+        st.caption(
+            "Bitcoin returns have fat tails: a Gaussian cone is too narrow and is rejected at every horizon. "
+            "The empirical (fat-tailed) cone used in the chart passes the test, except a slight over-coverage "
+            "at 8h for 95%, which is on the prudent side."
+        )
+
