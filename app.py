@@ -43,6 +43,7 @@ COMPARISON_PATH = _locate("comparison_tft_vs_cnn.json")
 RISK_CONE_PATH = _locate("risk_cone.json")
 HAR_PARAMS_PATH = _locate("har_params.json")
 HAR_EVAL_PATH = _locate("har_evaluation.json")
+HAR_CHALLENGER_PATH = _locate("har_challenger.json")
 
 # Start of the price history downloaded and shown on the chart
 HISTORY_START = os.getenv("HISTORY_START", "2025-11-11")
@@ -251,9 +252,14 @@ def load_daily_realised_variance(days: int = 100) -> pd.DataFrame:
     return out.asfreq("D").interpolate()
 
 
-def har_forecast(rv: pd.Series, coefs: list, resid_var: float) -> float:
-    """log-HAR forecast of the average daily realised variance over the horizon."""
-    x = np.log([rv.iloc[-1], rv.iloc[-7:].mean(), rv.iloc[-30:].mean()])
+def har_forecast(rv: pd.Series, coefs: list, resid_var: float, target_day=None) -> float:
+    """log-HAR forecast of the average daily realised variance over the horizon.
+    With 10 coefficients, the model includes day-of-week dummies (Tuesday..Sunday, Monday = reference)
+    for the forecast day: Bitcoin volatility is much lower at weekends."""
+    x = list(np.log([rv.iloc[-1], rv.iloc[-7:].mean(), rv.iloc[-30:].mean()]))
+    if len(coefs) == 10:
+        dow = pd.Timestamp(target_day).dayofweek
+        x += [1.0 if dow == d else 0.0 for d in range(1, 7)]
     return float(np.exp(coefs[0] + np.dot(coefs[1:], x) + resid_var / 2))
 
 # ============================================================
@@ -585,13 +591,17 @@ if har_params:
         st.info("5-minute prices are temporarily unavailable; the volatility forecast cannot be computed.")
     else:
         rv = rvd["rv"]
-        f1 = har_forecast(rv, har_params["1d"]["log_har"], har_params["1d"]["log_har_resid_var"])
+        nxt = rv.index[-1] + pd.Timedelta(days=1)
+        if "log_har_weekday" in har_params["1d"]:
+            f1 = har_forecast(rv, har_params["1d"]["log_har_weekday"], har_params["1d"]["log_har_weekday_resid_var"], nxt)
+        else:
+            f1 = har_forecast(rv, har_params["1d"]["log_har"], har_params["1d"]["log_har_resid_var"])
         f7 = har_forecast(rv, har_params["7d"]["log_har"], har_params["7d"]["log_har_resid_var"])
         ann = lambda v: np.sqrt(365 * v) * 100
         c1, c2, c3 = st.columns(3)
         c1.metric("Realised volatility, last complete day", f"{ann(rv.iloc[-1]):.1f}%",
                   help="Annualised: √(365 × daily realised variance from 5-minute returns)")
-        c2.metric("Forecast for the next day", f"{ann(f1):.1f}%")
+        c2.metric(f"Forecast for the next day ({nxt:%A})", f"{ann(f1):.1f}%")
         c2.caption(f"≈ ±{np.sqrt(f1) * 100:.2f}% price move over the day (1 standard deviation)")
         c3.metric("Forecast, next 7 days (average)", f"{ann(f7):.1f}%")
         c3.caption(f"≈ ±{np.sqrt(7 * f7) * 100:.2f}% price move over the week (1 standard deviation)")
@@ -602,7 +612,6 @@ if har_params:
                               marker_color="#4fa3ff"))
         figv.add_trace(go.Scatter(x=hist.index, y=ann(hist.rolling(7).mean()), mode="lines",
                                   line=dict(color="#00ffff", width=2), name="7-day average"))
-        nxt = hist.index[-1] + pd.Timedelta(days=1)
         figv.add_trace(go.Scatter(x=[nxt], y=[ann(f1)], mode="markers", marker=dict(color="orange", size=14),
                                   name="HAR forecast, next day"))
         figv.add_trace(go.Scatter(x=[nxt, nxt + pd.Timedelta(days=6)], y=[ann(f7)] * 2, mode="lines",
@@ -614,7 +623,9 @@ if har_params:
         st.plotly_chart(figv, width="stretch", theme=None)
         st.caption(
             "Unlike the direction of the price, Bitcoin volatility is partly predictable: calm and agitated "
-            "periods persist. The log-HAR model combines the realised volatility of the last day, week and month."
+            "periods persist. The log-HAR model combines the realised volatility of the last day, week and month. "
+            "The next-day forecast also accounts for the day of the week: volatility is much lower at weekends "
+            "(on Saturdays, about 40% of a Monday's variance in the training data)."
         )
 
     if har_eval:
@@ -633,5 +644,22 @@ if har_params:
                                  "Error on annualised vol (pts)": round(m["rmse_vol_pts"], 1),
                                  "Mincer-Zarnowitz R²": round(m["mz_r2"], 3),
                                  "DM p vs EWMA": "benchmark" if m["dm_p_vs_ewma"] is None else f"{m['dm_p_vs_ewma']:.3f}"})
+            st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+
+    challenger = _read_json(HAR_CHALLENGER_PATH)
+    if challenger:
+        with st.expander("Challenger model: Temporal Fusion Transformer vs HAR", expanded=False):
+            st.markdown(
+                "A Temporal Fusion Transformer (TFT) trained on the same data was used as a challenger. At one day it "
+                "beat the standard log-HAR by about 25% (QLIKE), but a log-HAR with day-of-week effects did almost as "
+                "well: the deep network's advantage came mainly from the weekend effect. The app therefore uses the "
+                "simpler, transparent model. MCS p-value: models with p ≥ 0.10 belong to the 90% model confidence set "
+                "(the set of models that cannot be statistically distinguished from the best)."
+            )
+            rows = []
+            for hz, block in challenger.items():
+                for name, m in block["models"].items():
+                    rows.append({"Horizon": hz.replace("d", " day(s)"), "Model": name, "QLIKE": round(m["qlike"], 3),
+                                 "MCS p-value": round(m["mcs_pvalue"], 2)})
             st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
 

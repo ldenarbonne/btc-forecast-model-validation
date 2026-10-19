@@ -1,0 +1,52 @@
+{
+ "1d": {
+  "n": 468,
+  "models": {
+   "log-HAR (fixed)": {
+    "qlike": 0.27348111771954897,
+    "mcs_pvalue": 0.0
+   },
+   "log-HAR + weekday": {
+    "qlike": 0.2087612620043545,
+    "mcs_pvalue": 0.8492
+   },
+   "EWMA RiskMetrics": {
+    "qlike": 0.34417216961678965,
+    "mcs_pvalue": 0.0
+   },
+   "GARCH(1,1)-t": {
+    "qlike": 0.38511990750724057,
+    "mcs_pvalue": 0.0
+   },
+   "TFT": {
+    "qlike": 0.20639927761282742,
+    "mcs_pvalue": 1.0
+   }
+  }
+ },
+ "7d": {
+  "n": 468,
+  "models": {
+   "log-HAR (fixed)": {
+    "qlike": 0.1955354552920547,
+    "mcs_pvalue": 0.0002
+   },
+   "log-HAR + weekday": {
+    "qlike": 0.18786304096249357,
+    "mcs_pvalue": 0.1288
+   },
+   "EWMA RiskMetrics": {
+    "qlike": 0.2326131941275782,
+    "mcs_pvalue": 0.1398
+   },
+   "GARCH(1,1)-t": {
+    "qlike": 0.23612851768596993,
+    "mcs_pvalue": 0.0292
+   },
+   "TFT": {
+    "qlike": 0.15119489639281472,
+    "mcs_pvalue": 1.0
+   }
+  }
+ }
+}
