@@ -33,6 +33,8 @@ FALLBACK_CSV = Path(os.getenv("FALLBACK_CSV", BASE_DIR / "data" / "Val_data.csv"
 EVAL_PATH = MODEL_DIR / "evaluation.json"
 COMPARISON_PATH = MODEL_DIR / "comparison_tft_vs_cnn.json"
 RISK_CONE_PATH = MODEL_DIR / "risk_cone.json"
+HAR_PARAMS_PATH = MODEL_DIR / "har_params.json"
+HAR_EVAL_PATH = MODEL_DIR / "har_evaluation.json"
 
 # Start of the price history downloaded and shown on the chart
 HISTORY_START = os.getenv("HISTORY_START", "2025-11-11")
@@ -200,6 +202,51 @@ def load_comparison():
 @st.cache_data
 def load_risk_cone():
     return _read_json(RISK_CONE_PATH)
+
+
+@st.cache_data
+def load_har():
+    return _read_json(HAR_PARAMS_PATH), _read_json(HAR_EVAL_PATH)
+
+
+@st.cache_data(ttl=1800, show_spinner="Downloading 5-minute prices for the volatility model…")
+def load_daily_realised_variance(days: int = 100) -> pd.DataFrame:
+    """Daily realised variance (complete UTC days) from 5-minute Binance closes."""
+    start_ms = int((pd.Timestamp.now(tz="UTC").floor("D") - pd.Timedelta(days=days)).timestamp() * 1000)
+    rows, cursor = [], start_ms
+    for url in BINANCE_ENDPOINTS:
+        try:
+            rows, cursor = [], start_ms
+            while True:
+                resp = requests.get(url, params={"symbol": SYMBOL, "interval": "5m",
+                                                 "startTime": cursor, "limit": 1000}, timeout=20)
+                resp.raise_for_status()
+                batch = resp.json()
+                if not batch:
+                    break
+                rows.extend((b[0], float(b[4])) for b in batch)
+                if len(batch) < 1000:
+                    break
+                cursor = batch[-1][0] + 300_000
+            break
+        except (requests.RequestException, ValueError):
+            continue
+    if not rows:
+        return pd.DataFrame()
+    s5 = pd.Series([r[1] for r in rows], index=pd.to_datetime([r[0] for r in rows], unit="ms"))
+    s5 = s5[~s5.index.duplicated()].sort_index()
+    r5 = np.log(s5).diff().dropna()
+    day = r5.index.floor("D")
+    out = pd.DataFrame({"rv": (r5 ** 2).groupby(day).sum(), "n": r5.groupby(day).size()})
+    today = pd.Timestamp.now(tz="UTC").floor("D").tz_localize(None)
+    out = out[(out.index < today) & (out.n >= 250)]
+    return out.asfreq("D").interpolate()
+
+
+def har_forecast(rv: pd.Series, coefs: list, resid_var: float) -> float:
+    """log-HAR forecast of the average daily realised variance over the horizon."""
+    x = np.log([rv.iloc[-1], rv.iloc[-7:].mean(), rv.iloc[-30:].mean()])
+    return float(np.exp(coefs[0] + np.dot(coefs[1:], x) + resid_var / 2))
 
 # ============================================================
 # SIDEBAR — DATA SOURCE
@@ -517,4 +564,66 @@ if risk_cone:
             "The empirical (fat-tailed) cone used in the chart passes the test, except a slight over-coverage "
             "at 8h for 95%, which is on the prudent side."
         )
+
+# ============================================================
+# VOLATILITY FORECAST — HAR MODEL (Corsi, 2009)
+# ============================================================
+
+har_params, har_eval = load_har()
+if har_params:
+    st.subheader("Volatility forecast — HAR model")
+    rvd = load_daily_realised_variance()
+    if rvd.empty or len(rvd) < 31:
+        st.info("5-minute prices are temporarily unavailable; the volatility forecast cannot be computed.")
+    else:
+        rv = rvd["rv"]
+        f1 = har_forecast(rv, har_params["1d"]["log_har"], har_params["1d"]["log_har_resid_var"])
+        f7 = har_forecast(rv, har_params["7d"]["log_har"], har_params["7d"]["log_har_resid_var"])
+        ann = lambda v: np.sqrt(365 * v) * 100
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Realised volatility, last complete day", f"{ann(rv.iloc[-1]):.1f}%",
+                  help="Annualised: √(365 × daily realised variance from 5-minute returns)")
+        c2.metric("Forecast for the next day", f"{ann(f1):.1f}%")
+        c2.caption(f"≈ ±{np.sqrt(f1) * 100:.2f}% price move over the day (1 standard deviation)")
+        c3.metric("Forecast, next 7 days (average)", f"{ann(f7):.1f}%")
+        c3.caption(f"≈ ±{np.sqrt(7 * f7) * 100:.2f}% price move over the week (1 standard deviation)")
+
+        hist = rv.iloc[-60:]
+        figv = go.Figure()
+        figv.add_trace(go.Bar(x=hist.index, y=ann(hist), name="Realised volatility (annualised)",
+                              marker_color="#4fa3ff"))
+        figv.add_trace(go.Scatter(x=hist.index, y=ann(hist.rolling(7).mean()), mode="lines",
+                                  line=dict(color="#00ffff", width=2), name="7-day average"))
+        nxt = hist.index[-1] + pd.Timedelta(days=1)
+        figv.add_trace(go.Scatter(x=[nxt], y=[ann(f1)], mode="markers", marker=dict(color="orange", size=14),
+                                  name="HAR forecast, next day"))
+        figv.add_trace(go.Scatter(x=[nxt, nxt + pd.Timedelta(days=6)], y=[ann(f7)] * 2, mode="lines",
+                                  line=dict(color="orange", width=3, dash="dash"), name="HAR forecast, next 7 days"))
+        figv.update_layout(height=420, plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font=dict(color="white"),
+                           yaxis=dict(title="Annualised volatility (%)", gridcolor="#333"),
+                           xaxis=dict(gridcolor="#333"), legend=dict(orientation="h", y=-0.15),
+                           margin=dict(t=30))
+        st.plotly_chart(figv, width="stretch", theme=None)
+        st.caption(
+            "Unlike the direction of the price, Bitcoin volatility is partly predictable: calm and agitated "
+            "periods persist. The log-HAR model combines the realised volatility of the last day, week and month."
+        )
+
+    if har_eval:
+        with st.expander("Out-of-sample evaluation of the volatility models", expanded=False):
+            st.markdown(
+                f"Parameters estimated on {har_eval['train']}, tested from {har_eval['test_start']}. "
+                "QLIKE is the standard loss for volatility forecasts (lower is better). Mincer-Zarnowitz R² "
+                "measures the share of the variation of realised variance explained by the forecast. "
+                "Diebold-Mariano p-value: is the model's QLIKE significantly lower than RiskMetrics EWMA?"
+            )
+            rows = []
+            for hz, block in har_eval["horizons"].items():
+                for name, m in block["models"].items():
+                    rows.append({"Horizon": hz.replace("d", " day(s)"), "Model": name,
+                                 "QLIKE": round(m["qlike"], 3),
+                                 "Error on annualised vol (pts)": round(m["rmse_vol_pts"], 1),
+                                 "Mincer-Zarnowitz R²": round(m["mz_r2"], 3),
+                                 "DM p vs EWMA": "benchmark" if m["dm_p_vs_ewma"] is None else f"{m['dm_p_vs_ewma']:.3f}"})
+            st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
 
