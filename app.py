@@ -30,11 +30,19 @@ SCALER_PATH = MODEL_DIR / os.getenv("SCALER_FILE", "1h_2h_4h_6h_8h_12h_24h.pkl")
 # Optional local CSV (1-minute candles) used only if Binance is unreachable
 FALLBACK_CSV = Path(os.getenv("FALLBACK_CSV", BASE_DIR / "data" / "Val_data.csv"))
 
-EVAL_PATH = MODEL_DIR / "evaluation.json"
-COMPARISON_PATH = MODEL_DIR / "comparison_tft_vs_cnn.json"
-RISK_CONE_PATH = MODEL_DIR / "risk_cone.json"
-HAR_PARAMS_PATH = MODEL_DIR / "har_params.json"
-HAR_EVAL_PATH = MODEL_DIR / "har_evaluation.json"
+def _locate(name: str) -> Path:
+    """Look for a result file in models/ first, then at the repository root."""
+    for folder in (MODEL_DIR, BASE_DIR):
+        if (folder / name).exists():
+            return folder / name
+    return MODEL_DIR / name
+
+
+EVAL_PATH = _locate("evaluation.json")
+COMPARISON_PATH = _locate("comparison_tft_vs_cnn.json")
+RISK_CONE_PATH = _locate("risk_cone.json")
+HAR_PARAMS_PATH = _locate("har_params.json")
+HAR_EVAL_PATH = _locate("har_evaluation.json")
 
 # Start of the price history downloaded and shown on the chart
 HISTORY_START = os.getenv("HISTORY_START", "2025-11-11")
